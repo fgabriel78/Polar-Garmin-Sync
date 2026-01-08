@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .models import SyncRecord, SyncStatus
+from .models import SyncRecord, SyncStatus, PolarActivity
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,7 @@ class Database:
                 (polar_activity_id,)
             )
             row = cursor.fetchone()
+            # Pydantic models or Enum usage check
             return row is not None and row["sync_status"] == SyncStatus.SUCCESS.value
     
     def get_sync_record(self, polar_activity_id: str) -> Optional[SyncRecord]:
@@ -128,7 +129,7 @@ class Database:
                     record.garmin_activity_id,
                     record.polar_activity_type,
                     record.garmin_activity_type,
-                    record.activity_date.isoformat() if record.activity_date else None,
+                    request_iso := (record.activity_date.isoformat() if record.activity_date else None),
                     record.sync_status.value,
                     record.sync_timestamp.isoformat(),
                     record.retry_count,

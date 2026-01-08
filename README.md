@@ -1,19 +1,23 @@
 # Polar-Garmin Sync
 
-A Python application that synchronizes sport activities from Polar.com to Garmin Connect.
+A high-performance Python application that synchronizes sport activities from Polar.com to Garmin Connect.
+
+> [!NOTE]
+> This application has been optimized with modern **AsyncIO** and **Pydantic** for fast, reliable, and concurrent synchronization.
 
 ## Features
 
-- **OAuth Authentication**: Secure authentication for both Polar and Garmin services
-- **Activity Sync**: Automatically sync activities from Polar to Garmin
-- **Duplicate Detection**: Tracks synced activities to avoid duplicates
-- **Activity Type Mapping**: Maps Polar activity types to Garmin equivalents
-- **Retry Mechanism**: Automatic retry for failed sync attempts
-- **Persistent Storage**: SQLite database for sync history
+- **High-Performance Sync**: Uses `asyncio` and `httpx` to process multiple activities in parallel.
+- **Robust Validation**: Powered by `Pydantic` for strict data validation and type safety.
+- **OAuth Authentication**: Secure authentication for both Polar and Garmin services.
+- **Duplicate Detection**: Tracks synced activities in a SQLite database to prevent duplicates.
+- **Activity Type Mapping**: Smartly maps Polar sports to Garmin equivalents.
+- **Resiliency**: Automatic retry mechanism for failed network operations.
+- **Modern Stack**: Built with Python 3.12+ features.
 
 ## Prerequisites
 
-- Python 3.10 or higher
+- **Python 3.12** or higher
 - Polar AccessLink API credentials ([Register here](https://admin.polaraccesslink.com/))
 - Garmin Connect account
 
@@ -28,7 +32,10 @@ A Python application that synchronizes sport activities from Polar.com to Garmin
 2. Create and activate a virtual environment:
    ```bash
    python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
    ```
 
 3. Install dependencies:
@@ -36,8 +43,12 @@ A Python application that synchronizes sport activities from Polar.com to Garmin
    pip install -r requirements.txt
    ```
 
-4. Copy `.env.example` to `.env` and fill in your credentials:
+4. Set up your environment variables:
+   Copy `.env.example` to `.env` and fill in your credentials.
    ```bash
+   # On Windows
+   copy .env.example .env
+   # On macOS/Linux
    cp .env.example .env
    ```
 
@@ -72,51 +83,33 @@ To sync all new activities from Polar to Garmin:
 python -m src.main --sync
 ```
 
+Failed syncs are automatically tracked and can be retried later.
+
+### Sync Statistics
+
+View detailed statistics about your sync history:
+
+```bash
+python -m src.main --stats
+```
+
 ### Options
 
 - `--authorize`: Run Polar OAuth authorization flow
 - `--sync`: Sync new activities from Polar to Garmin
 - `--retry-failed`: Retry previously failed sync attempts
 - `--dry-run`: Preview what would be synced without making changes
+- `--stats`: Show sync statistics
 - `--verbose`: Enable verbose logging
 
-## Activity Type Mapping
+## Technical Architecture
 
-The application maps Polar activity types to Garmin equivalents:
+The application uses a modern asynchronous architecture:
 
-| Polar Type | Garmin Type |
-|------------|-------------|
-| RUNNING | running |
-| CYCLING | cycling |
-| SWIMMING | swimming |
-| STRENGTH_TRAINING | strength_training |
-| OTHER | other |
-
-See `src/config/activity_mapping.py` for the complete mapping.
-
-## Project Structure
-
-```
-polar-garmin-sync/
-├── src/
-│   ├── __init__.py
-│   ├── main.py              # Entry point
-│   ├── polar_client.py      # Polar API client
-│   ├── garmin_client.py     # Garmin Connect client
-│   ├── sync_manager.py      # Sync orchestration
-│   ├── database.py          # SQLite operations
-│   ├── models.py            # Data models
-│   └── config/
-│       ├── __init__.py
-│       ├── settings.py      # Configuration settings
-│       └── activity_mapping.py  # Activity type mapping
-├── tests/
-│   └── ...
-├── data/                    # Database and logs
-├── requirements.txt
-├── pyproject.toml
-└── README.md
-```
+- **Entry Point**: `src/main.py` uses `asyncio.run()` to bootstrap the event loop.
+- **Network Layer**: `src/polar_client.py` uses `httpx.AsyncClient` for non-blocking API calls. `src/garmin_client.py` wraps `garth` in `asyncio.to_thread` to prevent blocking.
+- **Concurrency**: `src/sync_manager.py` uses `asyncio.TaskGroup` to sync multiple activities simultaneously.
+- **Data Models**: `src/models.py` uses `Pydantic` V2 for parsing and validation.
 
 ## Development
 

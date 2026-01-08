@@ -8,9 +8,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qs, urlparse
+import asyncio
 
-import requests
-from requests_oauthlib import OAuth2Session
+import httpx
+from requests_oauthlib import OAuth2Session  # Still useful for constructing auth URLs
 
 from .config.settings import PolarConfig
 from .models import PolarActivity
@@ -63,7 +64,6 @@ class PolarClient:
         self.config = config
         self.token_path = token_path
         self._token: Optional[dict] = None
-        self._session: Optional[OAuth2Session] = None
         self._load_token()
     
     def _load_token(self) -> None:
@@ -90,17 +90,6 @@ class PolarClient:
         """Check if we have a valid token."""
         return self._token is not None and "access_token" in self._token
     
-    def _get_session(self) -> OAuth2Session:
-        """Get an authenticated OAuth2 session."""
-        if self._session is None or not self.is_authenticated:
-            if not self.is_authenticated:
-                raise RuntimeError("Not authenticated. Please run authorization first.")
-            
-            self._session = OAuth2Session(
-                client_id=self.config.client_id,
-                token=self._token,
-            )
-        return self._session
     
     def authorize(self) -> bool:
         """
@@ -111,6 +100,7 @@ class PolarClient:
         """
         logger.info("Starting OAuth authorization flow...")
         
+        # Use requests-oauthlib just for convenient URL generation
         oauth = OAuth2Session(
             client_id=self.config.client_id,
             redirect_uri=self.config.redirect_uri,
@@ -147,8 +137,9 @@ class PolarClient:
             )
             self._save_token(token)
             
-            # Register user with AccessLink
-            self._register_user()
+            # Register user with AccessLink (sync call as this is CLI setup flow)
+            # functionality usually ok to be sync here or we run async wrapper
+            asyncio.run(self._register_user())
             
             logger.info("Authorization successful!")
             return True
@@ -157,92 +148,102 @@ class PolarClient:
             logger.error(f"Failed to get token: {e}")
             return False
     
-    def _register_user(self) -> None:
-        """Register user with Polar AccessLink."""
-        session = self._get_session()
-        
-        try:
-            response = session.post(
-                f"{self.config.api_base_url}/users",
-                json={"member-id": f"user_{datetime.now().timestamp()}"},
-                headers={"Accept": "application/json"},
-            )
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Get an authenticated AsyncClient."""
+        if not self.is_authenticated or not self._token:
+            raise RuntimeError("Not authenticated. Please run authorization first.")
             
-            if response.status_code == 200:
-                logger.info("User registered with AccessLink")
-            elif response.status_code == 409:
-                logger.debug("User already registered")
-            else:
-                logger.warning(f"User registration status: {response.status_code}")
+        headers = {
+            "Authorization": f"Bearer {self._token['access_token']}",
+            "Accept": "application/json"
+        }
+        
+        return httpx.AsyncClient(headers=headers, timeout=30.0)
+
+    async def _register_user(self) -> None:
+        """Register user with Polar AccessLink."""
+        try:
+            async with await self._get_client() as client:
+                response = await client.post(
+                    f"{self.config.api_base_url}/users",
+                    json={"member-id": f"user_{datetime.now().timestamp()}"},
+                )
+                
+                if response.status_code == 200:
+                    logger.info("User registered with AccessLink")
+                elif response.status_code == 409:
+                    logger.debug("User already registered")
+                else:
+                    logger.warning(f"User registration status: {response.status_code}")
                 
         except Exception as e:
             logger.warning(f"User registration failed: {e}")
     
-    def get_new_activities(self) -> list[PolarActivity]:
+    async def get_new_activities(self) -> list[PolarActivity]:
         """
         Get new activities from Polar.
         
         Returns:
             List of new PolarActivity objects.
         """
-        session = self._get_session()
         activities = []
         
         try:
-            # Create a transaction for exercises
-            response = session.post(
-                f"{self.config.api_base_url}/users/this/exercise-transactions",
-                headers={"Accept": "application/json"},
-            )
-            
-            if response.status_code == 201:
-                transaction = response.json()
-                transaction_id = str(transaction.get("transaction-id", ""))
-                resource_uri = transaction.get("resource-uri", "")
-                
-                logger.info(f"Created transaction {transaction_id}")
-                
-                # Get list of exercises in transaction
-                list_response = session.get(
-                    resource_uri,
-                    headers={"Accept": "application/json"},
+            async with await self._get_client() as client:
+                # Create a transaction for exercises
+                response = await client.post(
+                    f"{self.config.api_base_url}/users/this/exercise-transactions",
                 )
                 
-                if list_response.status_code == 200:
-                    exercises_data = list_response.json()
-                    exercise_urls = exercises_data.get("exercises", [])
+                if response.status_code == 201:
+                    transaction = response.json()
+                    transaction_id = str(transaction.get("transaction-id", ""))
+                    resource_uri = transaction.get("resource-uri", "")
                     
-                    for exercise_url in exercise_urls:
-                        try:
-                            exercise_response = session.get(
-                                exercise_url,
-                                headers={"Accept": "application/json"},
-                            )
-                            
-                            if exercise_response.status_code == 200:
-                                exercise_data = exercise_response.json()
-                                activity = PolarActivity.from_api_response(
-                                    exercise_data, transaction_id
-                                )
-                                activity.tcx_url = exercise_data.get("tcx")
-                                activity.gpx_url = exercise_data.get("gpx")
-                                activities.append(activity)
-                                logger.debug(f"Retrieved activity {activity.id}")
-                                
-                        except Exception as e:
-                            logger.error(f"Failed to get exercise: {e}")
-                
-            elif response.status_code == 204:
-                logger.info("No new activities available")
-            else:
-                logger.warning(f"Transaction creation failed: {response.status_code}")
+                    logger.info(f"Created transaction {transaction_id}")
+                    
+                    # Get list of exercises in transaction
+                    list_response = await client.get(resource_uri)
+                    
+                    if list_response.status_code == 200:
+                        exercises_data = list_response.json()
+                        exercise_urls = exercises_data.get("exercises", [])
+                        
+                        # Fetch all exercises in parallel
+                        async with asyncio.TaskGroup() as tg:
+                             tasks = [tg.create_task(self._fetch_activity(client, url, transaction_id)) for url in exercise_urls]
+                        
+                        for task in tasks:
+                             res = task.result()
+                             if res:
+                                 activities.append(res)
+                    
+                elif response.status_code == 204:
+                    logger.info("No new activities available")
+                else:
+                    logger.warning(f"Transaction creation failed: {response.status_code}")
                 
         except Exception as e:
             logger.error(f"Failed to get activities: {e}")
         
         return activities
+
+    async def _fetch_activity(self, client: httpx.AsyncClient, url: str, transaction_id: str) -> Optional[PolarActivity]:
+        """Fetch a single activity."""
+        try:
+            resp = await client.get(url)
+            if resp.status_code == 200:
+                 data = resp.json()
+                 activity = PolarActivity.from_api_response(data, transaction_id)
+                 activity.tcx_url = data.get("tcx")
+                 activity.gpx_url = data.get("gpx")
+                 logger.debug(f"Retrieved activity {activity.id}")
+                 return activity
+        except Exception as e:
+            logger.error(f"Failed to get exercise from {url}: {e}")
+        return None
     
-    def download_tcx(self, tcx_url: str) -> Optional[bytes]:
+    async def download_tcx(self, tcx_url: str) -> Optional[bytes]:
         """
         Download TCX file for an activity.
         
@@ -252,25 +253,29 @@ class PolarClient:
         Returns:
             TCX file content as bytes, or None if download failed.
         """
-        session = self._get_session()
-        
         try:
-            response = session.get(
-                tcx_url,
-                headers={"Accept": "application/vnd.garmin.tcx+xml"},
-            )
-            
-            if response.status_code == 200:
-                return response.content
-            else:
-                logger.error(f"TCX download failed: {response.status_code}")
-                return None
+            async with await self._get_client() as client:
+                # Override headers specifically for this request
+                # AccessLink requires specific accept for TCX
+                response = await client.get(
+                    tcx_url,
+                    headers={
+                        "Authorization": f"Bearer {self._token['access_token']}",
+                        "Accept": "application/vnd.garmin.tcx+xml"
+                    }
+                )
+                
+                if response.status_code == 200:
+                    return response.content
+                else:
+                    logger.error(f"TCX download failed: {response.status_code}")
+                    return None
                 
         except Exception as e:
             logger.error(f"TCX download error: {e}")
             return None
     
-    def commit_transaction(self, transaction_id: str) -> bool:
+    async def commit_transaction(self, transaction_id: str) -> bool:
         """
         Commit a transaction to mark activities as retrieved.
         
@@ -280,20 +285,18 @@ class PolarClient:
         Returns:
             True if commit was successful.
         """
-        session = self._get_session()
-        
         try:
-            response = session.put(
-                f"{self.config.api_base_url}/users/this/exercise-transactions/{transaction_id}",
-                headers={"Accept": "application/json"},
-            )
-            
-            if response.status_code == 200:
-                logger.info(f"Transaction {transaction_id} committed")
-                return True
-            else:
-                logger.error(f"Transaction commit failed: {response.status_code}")
-                return False
+            async with await self._get_client() as client:
+                response = await client.put(
+                    f"{self.config.api_base_url}/users/this/exercise-transactions/{transaction_id}",
+                )
+                
+                if response.status_code == 200:
+                    logger.info(f"Transaction {transaction_id} committed")
+                    return True
+                else:
+                    logger.error(f"Transaction commit failed: {response.status_code}")
+                    return False
                 
         except Exception as e:
             logger.error(f"Transaction commit error: {e}")

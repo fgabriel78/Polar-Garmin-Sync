@@ -1,5 +1,6 @@
 """Garmin Connect client using garth library."""
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Optional
@@ -32,7 +33,7 @@ class GarminClient:
         """Check if we have an active session."""
         return self._authenticated
     
-    def authenticate(self) -> bool:
+    async def authenticate(self) -> bool:
         """
         Authenticate with Garmin Connect.
         
@@ -40,35 +41,41 @@ class GarminClient:
             True if authentication was successful.
         """
         # Try to resume existing session
-        if self._try_resume_session():
+        if await self._try_resume_session():
             return True
         
         # Login with credentials
-        return self._login()
+        return await self._login()
     
-    def _try_resume_session(self) -> bool:
+    async def _try_resume_session(self) -> bool:
         """Try to resume an existing session."""
         if self.session_path.exists():
             try:
-                garth.resume(str(self.session_path))
+                # Wrap blocking calls
+                await asyncio.to_thread(garth.resume, str(self.session_path))
+                
                 # Test the session
-                garth.client.username
-                self._authenticated = True
-                logger.info("Resumed existing Garmin session")
-                return True
+                # garth.client.username is a property access but likely safe/fast IF loaded
+                username = garth.client.username
+                if username:
+                    self._authenticated = True
+                    logger.info("Resumed existing Garmin session")
+                    return True
             except Exception as e:
                 logger.debug(f"Could not resume session: {e}")
         return False
     
-    def _login(self) -> bool:
+    async def _login(self) -> bool:
         """Login with email and password."""
         try:
             logger.info("Logging into Garmin Connect...")
-            garth.login(self.config.email, self.config.password)
+            
+            # Blocking login call
+            await asyncio.to_thread(garth.login, self.config.email, self.config.password)
             
             # Save session for future use
             self.session_path.parent.mkdir(parents=True, exist_ok=True)
-            garth.save(str(self.session_path))
+            await asyncio.to_thread(garth.save, str(self.session_path))
             
             self._authenticated = True
             logger.info("Successfully logged into Garmin Connect")
@@ -81,7 +88,7 @@ class GarminClient:
             logger.error(f"Garmin login error: {e}")
             return False
     
-    def upload_activity(
+    async def upload_activity(
         self,
         file_content: bytes,
         file_name: str,
@@ -104,12 +111,12 @@ class GarminClient:
         
         try:
             # Determine file format from extension
-            file_format = file_name.split(".")[-1].lower()
+            # file_format = file_name.split(".")[-1].lower()
             
             logger.debug(f"Uploading activity: {file_name}")
             
             # Upload using garth
-            result = garth.client.upload(file_content)
+            result = await asyncio.to_thread(garth.client.upload, file_content)
             
             if result and hasattr(result, "get"):
                 activity_id = result.get("detailedImportResult", {}).get(
@@ -138,7 +145,7 @@ class GarminClient:
             logger.error(f"Garmin upload error: {e}")
             return None
     
-    def get_activities(self, limit: int = 20) -> list[dict]:
+    async def get_activities(self, limit: int = 20) -> list[dict]:
         """
         Get recent activities from Garmin Connect.
         
@@ -153,7 +160,8 @@ class GarminClient:
             return []
         
         try:
-            activities = garth.client.get(
+            activities = await asyncio.to_thread(
+                garth.client.get,
                 "activitylist-service",
                 f"activities?limit={limit}&start=0",
             )
@@ -163,7 +171,7 @@ class GarminClient:
             logger.error(f"Failed to get Garmin activities: {e}")
             return []
     
-    def set_activity_type(self, activity_id: str, activity_type: str) -> bool:
+    async def set_activity_type(self, activity_id: str, activity_type: str) -> bool:
         """
         Update the activity type for an uploaded activity.
         
@@ -179,7 +187,8 @@ class GarminClient:
             return False
         
         try:
-            garth.client.put(
+            await asyncio.to_thread(
+                garth.client.put,
                 "activity-service",
                 f"activity/{activity_id}",
                 json={"activityTypeDTO": {"typeKey": activity_type}},

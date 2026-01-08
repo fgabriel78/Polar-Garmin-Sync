@@ -1,8 +1,8 @@
 """Application settings and configuration."""
 
 import os
-from dataclasses import dataclass
 from pathlib import Path
+from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -14,72 +14,43 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 
-@dataclass
-class PolarConfig:
+class PolarConfig(BaseModel):
     """Polar API configuration."""
     
-    client_id: str
-    client_secret: str
+    client_id: str = Field(default_factory=lambda: os.getenv("POLAR_CLIENT_ID", ""))
+    client_secret: str = Field(default_factory=lambda: os.getenv("POLAR_CLIENT_SECRET", ""))
     redirect_uri: str = "http://localhost:8080/callback"
     authorization_url: str = "https://flow.polar.com/oauth2/authorization"
     token_url: str = "https://polarremote.com/v2/oauth2/token"
     api_base_url: str = "https://www.polaraccesslink.com/v3"
-    
-    @classmethod
-    def from_env(cls) -> "PolarConfig":
-        """Create configuration from environment variables."""
-        return cls(
-            client_id=os.getenv("POLAR_CLIENT_ID", ""),
-            client_secret=os.getenv("POLAR_CLIENT_SECRET", ""),
-        )
 
 
-@dataclass
-class GarminConfig:
+class GarminConfig(BaseModel):
     """Garmin Connect configuration."""
     
-    email: str
-    password: str
-    
-    @classmethod
-    def from_env(cls) -> "GarminConfig":
-        """Create configuration from environment variables."""
-        return cls(
-            email=os.getenv("GARMIN_EMAIL", ""),
-            password=os.getenv("GARMIN_PASSWORD", ""),
-        )
+    email: str = Field(default_factory=lambda: os.getenv("GARMIN_EMAIL", ""))
+    password: str = Field(default_factory=lambda: os.getenv("GARMIN_PASSWORD", ""))
 
 
-@dataclass
-class SyncConfig:
+class SyncConfig(BaseModel):
     """Sync operation configuration."""
     
-    retry_attempts: int = 3
-    retry_delay_seconds: int = 30
-    default_activity_type: str = "other"
+    retry_attempts: int = Field(default_factory=lambda: int(os.getenv("SYNC_RETRY_ATTEMPTS", "3")))
+    retry_delay_seconds: int = Field(default_factory=lambda: int(os.getenv("SYNC_RETRY_DELAY_SECONDS", "30")))
+    default_activity_type: str = Field(default_factory=lambda: os.getenv("DEFAULT_ACTIVITY_TYPE", "other"))
     database_path: Path = DATA_DIR / "sync_history.db"
     token_path: Path = DATA_DIR / "polar_token.json"
     garmin_session_path: Path = DATA_DIR / "garmin_session"
-    
-    @classmethod
-    def from_env(cls) -> "SyncConfig":
-        """Create configuration from environment variables."""
-        return cls(
-            retry_attempts=int(os.getenv("SYNC_RETRY_ATTEMPTS", "3")),
-            retry_delay_seconds=int(os.getenv("SYNC_RETRY_DELAY_SECONDS", "30")),
-            default_activity_type=os.getenv("DEFAULT_ACTIVITY_TYPE", "other"),
-        )
 
 
-class Settings:
+class Settings(BaseModel):
     """Application settings container."""
     
-    def __init__(self) -> None:
-        self.polar = PolarConfig.from_env()
-        self.garmin = GarminConfig.from_env()
-        self.sync = SyncConfig.from_env()
+    polar: PolarConfig = Field(default_factory=PolarConfig)
+    garmin: GarminConfig = Field(default_factory=GarminConfig)
+    sync: SyncConfig = Field(default_factory=SyncConfig)
     
-    def validate(self) -> list[str]:
+    def validate_settings(self) -> list[str]:
         """Validate configuration and return list of errors."""
         errors = []
         
@@ -93,6 +64,10 @@ class Settings:
             errors.append("GARMIN_PASSWORD is not set")
         
         return errors
+    
+    # helper for compatibility with previous validate() call
+    def validate(self) -> list[str]:
+        return self.validate_settings()
 
 
 # Global settings instance

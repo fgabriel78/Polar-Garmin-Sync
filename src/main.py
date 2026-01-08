@@ -3,6 +3,7 @@
 import argparse
 import logging
 import sys
+import asyncio
 
 from .config.settings import settings
 from .sync_manager import SyncManager
@@ -65,8 +66,8 @@ def setup_argparser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    """Main entry point."""
+async def main_async() -> int:
+    """Async main entry point."""
     parser = setup_argparser()
     args = parser.parse_args()
     
@@ -90,6 +91,10 @@ def main() -> int:
     # Handle commands
     if args.authorize:
         logger.info("Starting Polar authorization...")
+        # Authorize is synchronous in its current implementation (uses webbrowser + simple server)
+        # But we might have some async internals if we changed it.
+        # Currently polar.authorize() is synchronous based on previous refactor?
+        # Let's check polar_client.py. authorize() is sync.
         if sync_manager.polar.authorize():
             print("\n✓ Authorization successful!")
             print("You can now sync activities with --sync")
@@ -110,7 +115,7 @@ def main() -> int:
     
     if args.sync:
         logger.info("Starting activity sync...")
-        result = sync_manager.sync_all(dry_run=args.dry_run)
+        result = await sync_manager.sync_all(dry_run=args.dry_run)
         
         print(f"\n{'[DRY RUN] ' if args.dry_run else ''}{result}")
         
@@ -123,7 +128,7 @@ def main() -> int:
     
     if args.retry_failed:
         logger.info("Retrying failed syncs...")
-        result = sync_manager.retry_failed()
+        result = await sync_manager.retry_failed()
         
         print(f"\n{result}")
         
@@ -137,6 +142,11 @@ def main() -> int:
     # No command specified
     parser.print_help()
     return 0
+
+
+def main() -> int:
+    """Entry point."""
+    return asyncio.run(main_async())
 
 
 if __name__ == "__main__":
