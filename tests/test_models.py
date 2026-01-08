@@ -28,6 +28,7 @@ class TestSyncRecord:
         assert data["id"] == 1
         assert data["polar_activity_id"] == "test123"
         assert data["garmin_activity_id"] == "garmin456"
+        # Pydantic with use_enum_values=True stores the value string
         assert data["sync_status"] == "success"
     
     def test_from_dict(self) -> None:
@@ -48,7 +49,12 @@ class TestSyncRecord:
         
         assert record.id == 1
         assert record.polar_activity_id == "test123"
-        assert record.sync_status == SyncStatus.SUCCESS
+        # Pydantic model field will be the Enum member if queried via .sync_status access?
+        # Wait, if use_enum_values=True, the field itself on the instance becomes the value (str).
+        # Let's check the defined model config.
+        # "model_config = ConfigDict(use_enum_values=True)"
+        # So record.sync_status will be 'success' (str), not SyncStatus.SUCCESS.
+        assert record.sync_status == "success" 
     
     def test_default_values(self) -> None:
         """Test default values for SyncRecord."""
@@ -56,7 +62,8 @@ class TestSyncRecord:
         
         assert record.id is None
         assert record.polar_activity_id == ""
-        assert record.sync_status == SyncStatus.PENDING
+        # Default is SyncStatus.PENDING, which becomes "pending" with use_enum_values=True
+        assert record.sync_status == "pending"
         assert record.retry_count == 0
 
 

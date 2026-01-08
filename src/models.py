@@ -129,7 +129,7 @@ class SyncRecord(BaseModel):
     last_error: Optional[str] = None
     file_path: Optional[str] = None
     
-    model_config = ConfigDict(use_enum_values=True)
+    model_config = ConfigDict(use_enum_values=True, validate_assignment=True, validate_default=True)
     
     def to_dict(self) -> dict:
         """Convert to dictionary for database storage."""

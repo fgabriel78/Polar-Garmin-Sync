@@ -45,7 +45,7 @@ class TestDatabase:
         retrieved = db.get_sync_record("test123")
         assert retrieved is not None
         assert retrieved.polar_activity_id == "test123"
-        assert retrieved.sync_status == SyncStatus.SUCCESS
+        assert retrieved.sync_status == SyncStatus.SUCCESS.value
     
     def test_is_activity_synced(self, db: Database) -> None:
         """Test checking if activity is synced."""
@@ -116,7 +116,7 @@ class TestDatabase:
         
         retrieved = db.get_sync_record("update_test")
         assert retrieved is not None
-        assert retrieved.sync_status == SyncStatus.SUCCESS
+        assert retrieved.sync_status == SyncStatus.SUCCESS.value
         assert retrieved.garmin_activity_id == "garmin123"
     
     def test_get_sync_stats(self, db: Database) -> None:
