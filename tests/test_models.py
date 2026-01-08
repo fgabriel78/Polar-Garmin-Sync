@@ -1,0 +1,101 @@
+"""Tests for data models."""
+
+import pytest
+from datetime import datetime
+
+from src.models import SyncRecord, SyncStatus, SyncResult
+
+
+class TestSyncRecord:
+    """Tests for SyncRecord model."""
+    
+    def test_to_dict(self) -> None:
+        """Test converting SyncRecord to dictionary."""
+        record = SyncRecord(
+            id=1,
+            polar_activity_id="test123",
+            garmin_activity_id="garmin456",
+            polar_activity_type="RUNNING",
+            garmin_activity_type="running",
+            activity_date=datetime(2024, 1, 15, 10, 30),
+            sync_status=SyncStatus.SUCCESS,
+            sync_timestamp=datetime(2024, 1, 15, 11, 0),
+            retry_count=0,
+        )
+        
+        data = record.to_dict()
+        
+        assert data["id"] == 1
+        assert data["polar_activity_id"] == "test123"
+        assert data["garmin_activity_id"] == "garmin456"
+        assert data["sync_status"] == "success"
+    
+    def test_from_dict(self) -> None:
+        """Test creating SyncRecord from dictionary."""
+        data = {
+            "id": 1,
+            "polar_activity_id": "test123",
+            "garmin_activity_id": "garmin456",
+            "polar_activity_type": "RUNNING",
+            "garmin_activity_type": "running",
+            "activity_date": "2024-01-15T10:30:00",
+            "sync_status": "success",
+            "sync_timestamp": "2024-01-15T11:00:00",
+            "retry_count": 0,
+        }
+        
+        record = SyncRecord.from_dict(data)
+        
+        assert record.id == 1
+        assert record.polar_activity_id == "test123"
+        assert record.sync_status == SyncStatus.SUCCESS
+    
+    def test_default_values(self) -> None:
+        """Test default values for SyncRecord."""
+        record = SyncRecord()
+        
+        assert record.id is None
+        assert record.polar_activity_id == ""
+        assert record.sync_status == SyncStatus.PENDING
+        assert record.retry_count == 0
+
+
+class TestSyncResult:
+    """Tests for SyncResult model."""
+    
+    def test_str_representation(self) -> None:
+        """Test string representation of SyncResult."""
+        result = SyncResult(
+            success=True,
+            message="Sync completed",
+            activities_synced=5,
+            activities_skipped=2,
+            activities_failed=1,
+        )
+        
+        result_str = str(result)
+        assert "5 synced" in result_str
+        assert "2 skipped" in result_str
+        assert "1 failed" in result_str
+    
+    def test_failed_result(self) -> None:
+        """Test failed SyncResult."""
+        result = SyncResult(
+            success=False,
+            message="Sync failed",
+            errors=["Error 1", "Error 2"],
+        )
+        
+        assert result.success is False
+        assert len(result.errors) == 2
+
+
+class TestSyncStatus:
+    """Tests for SyncStatus enum."""
+    
+    def test_status_values(self) -> None:
+        """Test SyncStatus enum values."""
+        assert SyncStatus.PENDING.value == "pending"
+        assert SyncStatus.SUCCESS.value == "success"
+        assert SyncStatus.FAILED.value == "failed"
+        assert SyncStatus.SKIPPED.value == "skipped"

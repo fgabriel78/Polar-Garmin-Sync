@@ -1,0 +1,1 @@
+"""Polar-Garmin Sync Application."""
