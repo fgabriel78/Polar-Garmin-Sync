@@ -25,7 +25,7 @@ A high-performance Python application that synchronizes sport activities from Po
 
 1. Clone this repository:
    ```bash
-   git clone https://github.com/yourusername/polar-garmin-sync.git
+   git clone https://github.com/fgabriel78/polar-garmin-sync.git
    cd polar-garmin-sync
    ```
 
