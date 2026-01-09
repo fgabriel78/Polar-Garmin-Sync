@@ -19,7 +19,7 @@ class PolarConfig(BaseModel):
     
     client_id: str = Field(default_factory=lambda: os.getenv("POLAR_CLIENT_ID", ""))
     client_secret: str = Field(default_factory=lambda: os.getenv("POLAR_CLIENT_SECRET", ""))
-    redirect_uri: str = "http://localhost:8080/callback"
+    redirect_uri: str = Field(default_factory=lambda: os.getenv("POLAR_REDIRECT_URI", "http://localhost:8080/callback"))
     authorization_url: str = "https://flow.polar.com/oauth2/authorization"
     token_url: str = "https://polarremote.com/v2/oauth2/token"
     api_base_url: str = "https://www.polaraccesslink.com/v3"

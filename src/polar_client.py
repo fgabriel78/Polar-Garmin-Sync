@@ -64,6 +64,7 @@ class PolarClient:
         self.config = config
         self.token_path = token_path
         self._token: Optional[dict] = None
+        self.user_id: Optional[int] = None
         self._load_token()
     
     def _load_token(self) -> None:
@@ -72,10 +73,12 @@ class PolarClient:
             try:
                 with open(self.token_path, "r") as f:
                     self._token = json.load(f)
+                    self.user_id = self._token.get("x_user_id")
                 logger.debug("Loaded existing OAuth token")
             except (json.JSONDecodeError, IOError) as e:
                 logger.warning(f"Failed to load token: {e}")
                 self._token = None
+                self.user_id = None
     
     def _save_token(self, token: dict) -> None:
         """Save OAuth token to file."""
@@ -91,7 +94,7 @@ class PolarClient:
         return self._token is not None and "access_token" in self._token
     
     
-    def authorize(self) -> bool:
+    async def authorize(self) -> bool:
         """
         Run OAuth authorization flow.
         
@@ -137,9 +140,8 @@ class PolarClient:
             )
             self._save_token(token)
             
-            # Register user with AccessLink (sync call as this is CLI setup flow)
-            # functionality usually ok to be sync here or we run async wrapper
-            asyncio.run(self._register_user())
+            # Register user with AccessLink
+            await self._register_user()
             
             logger.info("Authorization successful!")
             return True
@@ -189,11 +191,24 @@ class PolarClient:
         activities = []
         
         try:
+            if not self.user_id:
+                logger.error("No user ID found in token. Please re-authorize.")
+                return []
+
             async with await self._get_client() as client:
                 # Create a transaction for exercises
                 response = await client.post(
-                    f"{self.config.api_base_url}/users/this/exercise-transactions",
+                    f"{self.config.api_base_url}/users/{self.user_id}/exercise-transactions",
                 )
+                
+                # Handle 404 Not Found - User might not be registered
+                if response.status_code == 404:
+                    logger.warning("User not registered (404). Attempting registration...")
+                    await self._register_user()
+                    # Retry transaction creation
+                    response = await client.post(
+                        f"{self.config.api_base_url}/users/{self.user_id}/exercise-transactions",
+                    )
                 
                 if response.status_code == 201:
                     transaction = response.json()
@@ -287,8 +302,12 @@ class PolarClient:
         """
         try:
             async with await self._get_client() as client:
+                if not self.user_id:
+                     logger.error("No user ID found")
+                     return False
+
                 response = await client.put(
-                    f"{self.config.api_base_url}/users/this/exercise-transactions/{transaction_id}",
+                    f"{self.config.api_base_url}/users/{self.user_id}/exercise-transactions/{transaction_id}",
                 )
                 
                 if response.status_code == 200:

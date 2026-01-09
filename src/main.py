@@ -95,7 +95,8 @@ async def main_async() -> int:
         # But we might have some async internals if we changed it.
         # Currently polar.authorize() is synchronous based on previous refactor?
         # Let's check polar_client.py. authorize() is sync.
-        if sync_manager.polar.authorize():
+        # Let's check polar_client.py. authorize() is sync.
+        if await sync_manager.polar.authorize():
             print("\n✓ Authorization successful!")
             print("You can now sync activities with --sync")
             return 0
