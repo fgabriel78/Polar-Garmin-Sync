@@ -59,9 +59,14 @@ Edit the `.env` file with your credentials:
 ```env
 POLAR_CLIENT_ID=your_polar_client_id
 POLAR_CLIENT_SECRET=your_polar_client_secret
+POLAR_REDIRECT_URI=http://localhost:8080/callback # Optional: Defaults to http://localhost:8080/callback
 GARMIN_EMAIL=your_garmin_email
 GARMIN_PASSWORD=your_garmin_password
 ```
+
+> [!TIP]
+> **Polar Redirect URI**: Ensure `POLAR_REDIRECT_URI` matches exactly what you configured in the [Polar AccessLink Console](https://admin.polaraccesslink.com/).
+> If you set your redirect URL to `http://localhost:8080` in the console, add `POLAR_REDIRECT_URI=http://localhost:8080` to your `.env` file.
 
 ## Usage
 
