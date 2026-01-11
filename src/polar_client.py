@@ -184,6 +184,8 @@ class PolarClient:
     async def get_new_activities(self) -> list[PolarActivity]:
         """
         Get new activities from Polar.
+        Uses the 'List exercises' endpoint which returns exercises from the last 30 days.
+        Local deduplication in SyncManager will handle skipping already synced ones.
         
         Returns:
             List of new PolarActivity objects.
@@ -196,67 +198,57 @@ class PolarClient:
                 return []
 
             async with await self._get_client() as client:
-                # Create a transaction for exercises
-                response = await client.post(
-                    f"{self.config.api_base_url}/users/{self.user_id}/exercise-transactions",
-                )
+                # Use the List Exercises API
+                # https://www.polar.com/accesslink-api/#list-exercises
+                url = f"{self.config.api_base_url}/exercises"
                 
-                # Handle 404 Not Found - User might not be registered
-                if response.status_code == 404:
-                    logger.warning("User not registered (404). Attempting registration...")
-                    await self._register_user()
-                    # Retry transaction creation
-                    response = await client.post(
-                        f"{self.config.api_base_url}/users/{self.user_id}/exercise-transactions",
-                    )
+                logger.info(f"Fetching exercises from {url}")
+                response = await client.get(url)
                 
-                if response.status_code == 201:
-                    transaction = response.json()
-                    transaction_id = str(transaction.get("transaction-id", ""))
-                    resource_uri = transaction.get("resource-uri", "")
+                if response.status_code == 401:
+                     logger.error("Authentication failed (401). Token may be expired.")
+                     return []
+                
+                if response.status_code == 200:
+                    exercises_data = response.json()
+                    # exercises_data should be a list of exercise objects
                     
-                    logger.info(f"Created transaction {transaction_id}")
-                    
-                    # Get list of exercises in transaction
-                    list_response = await client.get(resource_uri)
-                    
-                    if list_response.status_code == 200:
-                        exercises_data = list_response.json()
-                        exercise_urls = exercises_data.get("exercises", [])
+                    if isinstance(exercises_data, list):
+                        logger.info(f"Found {len(exercises_data)} exercises from Polar (last 30 days)")
                         
-                        # Fetch all exercises in parallel
-                        async with asyncio.TaskGroup() as tg:
-                             tasks = [tg.create_task(self._fetch_activity(client, url, transaction_id)) for url in exercise_urls]
+                        for item in exercises_data:
+                            try:
+                                # Create activity object
+                                activity = PolarActivity.from_api_response(item, transaction_id=None)
+                                
+                                # Manually construct the TCX/GPX URLs properly since they are standard
+                                # Docs: GET /v3/exercises/{exerciseId}/tcx
+                                if not activity.tcx_url:
+                                     activity.tcx_url = f"{self.config.api_base_url}/exercises/{activity.id}/tcx"
+                                if not activity.gpx_url:
+                                     activity.gpx_url = f"{self.config.api_base_url}/exercises/{activity.id}/gpx"
+                                
+                                activities.append(activity)
+                            except Exception as e:
+                                logger.warning(f"Failed to parse activity item: {e}")
+                    else:
+                        logger.warning(f"Unexpected response format: {type(exercises_data)}")
                         
-                        for task in tasks:
-                             res = task.result()
-                             if res:
-                                 activities.append(res)
-                    
-                elif response.status_code == 204:
-                    logger.info("No new activities available")
                 else:
-                    logger.warning(f"Transaction creation failed: {response.status_code}")
+                    logger.warning(f"Failed to list exercises: {response.status_code} - {response.text}")
+                    # If 404, standard logic might suggest user not registered, but let's just log for now
+                    if response.status_code == 404:
+                         logger.warning("Received 404. User might not be registered or API endpoint changed.")
+                         # Optional: try self._register_user() if we firmly believe it's needed,
+                         # but usually Authorize flow handles it.
                 
         except Exception as e:
             logger.error(f"Failed to get activities: {e}")
         
         return activities
 
-    async def _fetch_activity(self, client: httpx.AsyncClient, url: str, transaction_id: str) -> Optional[PolarActivity]:
-        """Fetch a single activity."""
-        try:
-            resp = await client.get(url)
-            if resp.status_code == 200:
-                 data = resp.json()
-                 activity = PolarActivity.from_api_response(data, transaction_id)
-                 activity.tcx_url = data.get("tcx")
-                 activity.gpx_url = data.get("gpx")
-                 logger.debug(f"Retrieved activity {activity.id}")
-                 return activity
-        except Exception as e:
-            logger.error(f"Failed to get exercise from {url}: {e}")
-        return None
+    # _fetch_activity is no longer needed with the List Exercises API 
+    # as the list endpoint returns full objects (or sufficient summaries).
     
     async def download_tcx(self, tcx_url: str) -> Optional[bytes]:
         """

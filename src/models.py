@@ -40,76 +40,63 @@ class PolarActivity(BaseModel):
     @classmethod
     def from_api_response(cls, data: dict, transaction_id: Optional[str] = None) -> "PolarActivity":
         """Create a PolarActivity from Polar API response data."""
-        # Pre-process duration from ISO format "PT1H2M3S" to seconds
-        duration_str = data.get("duration", "PT0S")
+        
+        # Helper to get value with hyphen or underscore key
+        def get_val(d, key_hyphen: str):
+            key_under = key_hyphen.replace("-", "_")
+            return d.get(key_hyphen, d.get(key_under))
+
+        # Parse duration from ISO format "PT1H2M3S" to seconds
+        # The API might verify "PT2H44M" or "PT3600S"
+        duration_str = get_val(data, "duration") or "PT0S"
         duration_seconds = 0
-        # Simple parser for the specific format seen in the original code
-        # Original: int(data.get("duration", "PT0S").replace("PT", "").replace("S", "").split("H")[0].split("M")[0] or 0)
-        # That original parsing logic seemed very fragile/broken for standard ISO periods.
-        # Let's try to be a bit more robust or stick to the original logic if it was working for their specific inputs,
-        # but cleaned up.
-        # Assuming format PTxxxS or similar simple ones as per previous code.
-        # Let's fix the original logic which was:
-        # data.get("duration", "PT0S").replace("PT", "").replace("S", "").split("H")[0].split("M")[0]
-        # If input is PT1H30M, that logic would produce "1" then "30" etc? No, splitting by H then taking [0] implies it expects H.
         
-        # Let's blindly trust pydantic can handle datetime, but for duration it's an int.
-        # I'll stick to a safer manual parsing or just keep the original logic's intent but implemented better.
-        # Actually, let's keep it simple and just map the fields, letting the caller handle the complex parsing if needed,
-        # OR put the parsing logic here.
-        
-        # Re-implementing the parsing logic from the original file, but slightly safer:
         try:
-             # Very basic ISO8601 duration parser for PnWnDTnHnMnS
-             import isodate # dependency might not be there?
-             # Let's stick to simple string manip for now if we don't want to add more deps, 
-             # OR since we are optimizing, we could assume standard formats.
-             # The original code was: 
-             # int(data.get("duration", "PT0S").replace("PT", "").replace("S", "").split("H")[0].split("M")[0] or 0)
-             # This looks essentially broken for anything with minutes/hours.
-             # Let's just store the seconds.
-             
-             # BETTER APPROACH:
-             # The API likely returns PT3600S for 1 hour.
-             dur = duration_str.replace("PT", "").replace("S", "")
-             # If it has H or M, it's more complex.
-             # Let's just create a dictionary for Pydantic to consume.
-             pass
-        except:
-             pass
+            import re
+            # Regex to parse ISO duration: PT#H#M#S
+            match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(\.\d+)?)S)?', duration_str)
+            if match:
+                hours = int(match.group(1) or 0)
+                minutes = int(match.group(2) or 0)
+                seconds = float(match.group(3) or 0)
+                duration_seconds = int(hours * 3600 + minutes * 60 + seconds)
+            else:
+                duration_seconds = 0
+        except Exception:
+            duration_seconds = 0
 
         # Mapping logical fields
         flat_data = data.copy()
         
+        # Normalize keys for Pydantic (it expects aliases like 'start-time' or field name 'date')
+        # We will populate the fields directly in flat_data using Pydantic field names where possible
+        
+        # Handle start-time/date
+        start_time = get_val(data, "start-time")
+        if start_time:
+             flat_data["start-time"] = start_time.replace("Z", "+00:00")
+        
+        # Handle polar-user
+        flat_data["polar-user"] = get_val(data, "polar-user")
+
         # Handle nested heart-rate
-        if "heart-rate" in data:
-            flat_data["heart_rate_avg"] = data["heart-rate"].get("average")
-            flat_data["heart_rate_max"] = data["heart-rate"].get("maximum")
+        hr_data = get_val(data, "heart-rate")
+        if hr_data:
+            flat_data["heart_rate_avg"] = hr_data.get("average")
+            flat_data["heart_rate_max"] = hr_data.get("maximum")
         
         # Handle activity type
-        flat_data["activity_type"] = data.get("detailed-sport-info", data.get("sport", "OTHER"))
+        flat_data["activity_type"] = get_val(data, "detailed-sport-info") or get_val(data, "sport") or "OTHER"
         
-        # Handle duration manually to match original behavior (roughly)
-        # If the original behavior was "seconds", let's try to parse it.
-        # For this refactor, I will place the parsed integer directly into the dict.
-        d_str = data.get("duration", "PT0S")
-        seconds = 0
-        try:
-            # Basic parsing for "PT123S"
-            if d_str.startswith("PT") and d_str.endswith("S"):
-                 seconds = int(float(d_str[2:-1])) 
-            else:
-                 # Fallback/0
-                 seconds = 0
-        except:
-             seconds = 0
-        flat_data["duration"] = seconds
-        
+        flat_data["duration"] = duration_seconds
         flat_data["transaction_id"] = transaction_id
         
-        # Handle date "Z" replacement for compatibility
-        if "start-time" in flat_data:
-             flat_data["start-time"] = flat_data["start-time"].replace("Z", "+00:00")
+        # Determine TCX/GPX URLs if not present (for List Exercises API)
+        # If 'tcx' key is missing but we have 'id', we can construct it?
+        # The calling client might set this, but we can also be smart here if we passed the base URL context.
+        # For now, we leave them None if missing, and client handles it.
+        flat_data["tcx_url"] = get_val(data, "tcx")
+        flat_data["gpx_url"] = get_val(data, "gpx")
 
         return cls(**flat_data)
 

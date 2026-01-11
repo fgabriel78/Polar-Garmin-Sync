@@ -8,6 +8,7 @@ A high-performance Python application that synchronizes sport activities from Po
 ## Features
 
 - **High-Performance Sync**: Uses `asyncio` and `httpx` to process multiple activities in parallel.
+- **Smart Sync**: Automatically checks the last 30 days of activities to ensure nothing is missed.
 - **Robust Validation**: Powered by `Pydantic` for strict data validation and type safety.
 - **OAuth Authentication**: Secure authentication for both Polar and Garmin services.
 - **Duplicate Detection**: Tracks synced activities in a SQLite database to prevent duplicates.
