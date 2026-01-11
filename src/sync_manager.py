@@ -104,10 +104,6 @@ class SyncManager:
                 case _:
                      result.activities_failed += 1
         
-        # Commit Polar transaction if not dry run
-        if not dry_run and activities and activities[0].transaction_id:
-            await self.polar.commit_transaction(activities[0].transaction_id)
-        
         if result.activities_failed > 0:
             result.success = False
             result.message = f"Sync completed with {result.activities_failed} failures"

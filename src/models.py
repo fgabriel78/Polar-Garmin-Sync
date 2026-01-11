@@ -16,6 +16,11 @@ class SyncStatus(Enum):
     SKIPPED = "skipped"
 
 
+# Regex for ISO8601 duration string (e.g., PT1H30M10S)
+import re
+ISO_8601_DURATION_REGEX = re.compile(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(\.\d+)?)S)?')
+
+
 class PolarActivity(BaseModel):
     """Represents an activity from Polar."""
     
@@ -42,61 +47,51 @@ class PolarActivity(BaseModel):
         """Create a PolarActivity from Polar API response data."""
         
         # Helper to get value with hyphen or underscore key
-        def get_val(d, key_hyphen: str):
+        def _get_val(key_hyphen: str) -> any:
             key_under = key_hyphen.replace("-", "_")
-            return d.get(key_hyphen, d.get(key_under))
+            return data.get(key_hyphen, data.get(key_under))
 
         # Parse duration from ISO format "PT1H2M3S" to seconds
-        # The API might verify "PT2H44M" or "PT3600S"
-        duration_str = get_val(data, "duration") or "PT0S"
+        duration_str = _get_val("duration") or "PT0S"
         duration_seconds = 0
         
         try:
-            import re
-            # Regex to parse ISO duration: PT#H#M#S
-            match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(\.\d+)?)S)?', duration_str)
+            match = ISO_8601_DURATION_REGEX.match(duration_str)
             if match:
                 hours = int(match.group(1) or 0)
                 minutes = int(match.group(2) or 0)
                 seconds = float(match.group(3) or 0)
                 duration_seconds = int(hours * 3600 + minutes * 60 + seconds)
-            else:
-                duration_seconds = 0
         except Exception:
-            duration_seconds = 0
+            # Fallback to 0 if parsing fails
+            pass
 
         # Mapping logical fields
         flat_data = data.copy()
         
-        # Normalize keys for Pydantic (it expects aliases like 'start-time' or field name 'date')
-        # We will populate the fields directly in flat_data using Pydantic field names where possible
-        
         # Handle start-time/date
-        start_time = get_val(data, "start-time")
+        start_time = _get_val("start-time")
         if start_time:
              flat_data["start-time"] = start_time.replace("Z", "+00:00")
         
         # Handle polar-user
-        flat_data["polar-user"] = get_val(data, "polar-user")
+        flat_data["polar-user"] = _get_val("polar-user")
 
         # Handle nested heart-rate
-        hr_data = get_val(data, "heart-rate")
+        hr_data = _get_val("heart-rate")
         if hr_data:
             flat_data["heart_rate_avg"] = hr_data.get("average")
             flat_data["heart_rate_max"] = hr_data.get("maximum")
         
         # Handle activity type
-        flat_data["activity_type"] = get_val(data, "detailed-sport-info") or get_val(data, "sport") or "OTHER"
+        flat_data["activity_type"] = _get_val("detailed-sport-info") or _get_val("sport") or "OTHER"
         
         flat_data["duration"] = duration_seconds
         flat_data["transaction_id"] = transaction_id
         
-        # Determine TCX/GPX URLs if not present (for List Exercises API)
-        # If 'tcx' key is missing but we have 'id', we can construct it?
-        # The calling client might set this, but we can also be smart here if we passed the base URL context.
-        # For now, we leave them None if missing, and client handles it.
-        flat_data["tcx_url"] = get_val(data, "tcx")
-        flat_data["gpx_url"] = get_val(data, "gpx")
+        # Determine TCX/GPX URLs
+        flat_data["tcx_url"] = _get_val("tcx")
+        flat_data["gpx_url"] = _get_val("gpx")
 
         return cls(**flat_data)
 

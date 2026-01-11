@@ -220,15 +220,13 @@ class PolarClient:
     async def get_new_activities(self) -> list[PolarActivity]:
         """
         Get new activities from Polar.
-        Uses the 'List exercises' endpoint which returns exercises from the last 30 days.
-        Local deduplication in SyncManager will handle skipping already synced ones.
         
         Returns:
             List of new PolarActivity objects.
         """
         activities = []
         
-        # Pull notifications first as requested/required to trigger data availability
+        # 1. Pull notifications to trigger availability
         await self._pull_notifications()
         
         try:
@@ -237,74 +235,82 @@ class PolarClient:
                 return []
 
             async with await self._get_client() as client:
-                # Use the List Exercises API
-                # https://www.polar.com/accesslink-api/#list-exercises
-                url = f"{self.config.api_base_url}/exercises"
+                # 2. Fetch exercises JSON (handling auto-registration)
+                exercises_data = await self._fetch_exercises_with_retry(client)
                 
-                logger.info(f"Fetching exercises from {url}")
-                response = await client.get(url)
-                
-                # Auto-register logic if needed
-                should_retry = False
-                
-                if response.status_code == 404:
-                    logger.warning("Received 404 from Exercises API. Attempting user registration...")
-                    if await self._register_user():
-                         should_retry = True
-                    else:
-                         logger.warning("Registration confirmed (or failed), but 404 persists.")
-                
-                # If success but empty, also try registering just in case
-                elif response.status_code == 200 and not response.json():
-                     logger.info("No exercises found. Verifying user registration...")
-                     if await self._register_user():
-                          logger.info("Registration successful. Retrying fetch...")
-                          should_retry = True
-                
-                # Retry if registration happened
-                if should_retry:
-                     logger.info(f"Retrying fetch from {url}")
-                     response = await client.get(url)
-
-                if response.status_code == 401:
-                     logger.error("Authentication failed (401). Token may be expired.")
-                     return []
-                
-                if response.status_code == 200:
-                    exercises_data = response.json()
-                    # exercises_data should be a list of exercise objects
-                    
-                    if isinstance(exercises_data, list):
-                        logger.info(f"Found {len(exercises_data)} exercises from Polar (last 30 days)")
-                        
-                        for item in exercises_data:
-                            try:
-                                # Create activity object
-                                activity = PolarActivity.from_api_response(item, transaction_id=None)
-                                
-                                # Manually construct the TCX/GPX URLs properly since they are standard
-                                # Docs: GET /v3/exercises/{exerciseId}/tcx
-                                if not activity.tcx_url:
-                                     activity.tcx_url = f"{self.config.api_base_url}/exercises/{activity.id}/tcx"
-                                if not activity.gpx_url:
-                                     activity.gpx_url = f"{self.config.api_base_url}/exercises/{activity.id}/gpx"
-                                
-                                activities.append(activity)
-                            except Exception as e:
-                                logger.warning(f"Failed to parse activity item: {e}")
-                    else:
-                        logger.warning(f"Unexpected response format: {type(exercises_data)}")
-                        
-                else:
-                    logger.warning(f"Failed to list exercises: {response.status_code} - {response.text}")
+                # 3. Parse and build activity objects
+                if exercises_data:
+                    activities = self._parse_exercises(exercises_data)
                 
         except Exception as e:
             logger.error(f"Failed to get activities: {e}")
         
         return activities
 
-    # _fetch_activity is no longer needed with the List Exercises API 
-    # as the list endpoint returns full objects (or sufficient summaries).
+    async def _fetch_exercises_with_retry(self, client: httpx.AsyncClient) -> list[dict]:
+        """Fetch exercises from API, handling auto-registration if needed."""
+        url = f"{self.config.api_base_url}/exercises"
+        logger.info(f"Fetching exercises from {url}")
+        
+        response = await client.get(url)
+        
+        # Check if we need to auto-register
+        should_retry = False
+        
+        if response.status_code == 404:
+            logger.warning("Received 404 from Exercises API. Attempting user registration...")
+            if await self._register_user():
+                 should_retry = True
+            else:
+                 logger.warning("Registration confirmed (or failed), but 404 persists.")
+        
+        elif response.status_code == 200 and not response.json():
+             logger.info("No exercises found. Verifying user registration...")
+             if await self._register_user():
+                  logger.info("Registration successful. Retrying fetch...")
+                  should_retry = True
+        
+        if should_retry:
+             logger.info(f"Retrying fetch from {url}")
+             response = await client.get(url)
+
+        if response.status_code == 401:
+             logger.error("Authentication failed (401). Token may be expired.")
+             return []
+        
+        if response.status_code == 200:
+            return response.json()
+        
+        logger.warning(f"Failed to list exercises: {response.status_code} - {response.text}")
+        return []
+
+    def _parse_exercises(self, exercises_data: any) -> list[PolarActivity]:
+        """Parse raw exercises list into PolarActivity objects."""
+        activities = []
+        
+        if not isinstance(exercises_data, list):
+            logger.warning(f"Unexpected response format: {type(exercises_data)}")
+            return []
+            
+        logger.info(f"Found {len(exercises_data)} exercises from Polar (last 30 days)")
+        
+        for item in exercises_data:
+            try:
+                # Create activity object
+                activity = PolarActivity.from_api_response(item, transaction_id=None)
+                
+                # Construct TCX/GPX URLs
+                if not activity.tcx_url:
+                     activity.tcx_url = f"{self.config.api_base_url}/exercises/{activity.id}/tcx"
+                if not activity.gpx_url:
+                     activity.gpx_url = f"{self.config.api_base_url}/exercises/{activity.id}/gpx"
+                
+                activities.append(activity)
+            except Exception as e:
+                logger.warning(f"Failed to parse activity item: {e}")
+                
+        return activities
+
     
     async def download_tcx(self, tcx_url: str) -> Optional[bytes]:
         """
@@ -338,33 +344,4 @@ class PolarClient:
             logger.error(f"TCX download error: {e}")
             return None
     
-    async def commit_transaction(self, transaction_id: str) -> bool:
-        """
-        Commit a transaction to mark activities as retrieved.
-        
-        Args:
-            transaction_id: The transaction ID to commit.
-        
-        Returns:
-            True if commit was successful.
-        """
-        try:
-            async with await self._get_client() as client:
-                if not self.user_id:
-                     logger.error("No user ID found")
-                     return False
 
-                response = await client.put(
-                    f"{self.config.api_base_url}/users/{self.user_id}/exercise-transactions/{transaction_id}",
-                )
-                
-                if response.status_code == 200:
-                    logger.info(f"Transaction {transaction_id} committed")
-                    return True
-                else:
-                    logger.error(f"Transaction commit failed: {response.status_code}")
-                    return False
-                
-        except Exception as e:
-            logger.error(f"Transaction commit error: {e}")
-            return False
