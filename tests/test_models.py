@@ -106,3 +106,47 @@ class TestSyncStatus:
         assert SyncStatus.SUCCESS.value == "success"
         assert SyncStatus.FAILED.value == "failed"
         assert SyncStatus.SKIPPED.value == "skipped"
+
+from src.models import SyncRecord, SyncStatus, SyncResult, PolarActivity
+
+class TestPolarActivity:
+    """Tests for PolarActivity model."""
+    
+    def test_from_api_response(self) -> None:
+        """Test parsing PolarActivity from API response."""
+        data = {
+            "id": "123",
+            "polar-user": "user1",
+            "start-time": "2023-01-01T10:00:00Z",
+            "duration": "PT1H30M10S",
+            "calories": 500,
+            "distance": 1000.0,
+            "detailed-sport-info": "RUNNING",
+             "heart-rate": {"average": 140, "maximum": 170}
+        }
+        
+        activity = PolarActivity.from_api_response(data)
+        
+        # Duration: 1h 30m 10s = 3600 + 1800 + 10 = 5410
+        assert activity.duration == 5410
+        assert activity.activity_type == "RUNNING"
+        assert activity.calories == 500
+        assert activity.heart_rate_avg == 140
+
+    def test_underscore_keys(self) -> None:
+        """Test parsing with underscore keys (List Exercises format compatibility)."""
+        data = {
+            "id": "456",
+            "polar_user": "user2",
+            "start_time": "2023-01-02T10:00:00Z",
+            "duration": "PT45M",
+            "calories": 300,
+            "distance": 5000.0,
+            "sport": "CYCLING"
+        }
+        
+        activity = PolarActivity.from_api_response(data)
+        
+        assert activity.duration == 2700  # 45 * 60
+        assert activity.activity_type == "CYCLING"
+        assert activity.polar_user_id == "user2"

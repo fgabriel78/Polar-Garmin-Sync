@@ -162,8 +162,13 @@ class PolarClient:
         
         return httpx.AsyncClient(headers=headers, timeout=30.0)
 
-    async def _register_user(self) -> None:
-        """Register user with Polar AccessLink."""
+    async def _register_user(self) -> bool:
+        """
+        Register user with Polar AccessLink.
+        
+        Returns:
+            True if registration was successful (200), False otherwise (e.g. 409 already registered).
+        """
         try:
             async with await self._get_client() as client:
                 response = await client.post(
@@ -173,14 +178,45 @@ class PolarClient:
                 
                 if response.status_code == 200:
                     logger.info("User registered with AccessLink")
+                    return True
                 elif response.status_code == 409:
                     logger.debug("User already registered")
+                    return False
                 else:
                     logger.warning(f"User registration status: {response.status_code}")
+                    return False
                 
         except Exception as e:
             logger.warning(f"User registration failed: {e}")
+            return False
     
+    async def _pull_notifications(self) -> None:
+        """
+        Pull notifications from Polar API.
+        This endpoint is sometimes required to 'wake up' the API or check for available data.
+        Uses Basic Auth with Client Credentials.
+        """
+        try:
+            # Create a separate client for Basic Auth request since main client uses Bearer
+            auth = httpx.BasicAuth(self.config.client_id, self.config.client_secret)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                url = f"{self.config.api_base_url}/notifications"
+                logger.debug(f"Pulling notifications from {url}...")
+                
+                response = await client.get(url, auth=auth)
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    logger.info(f"Pulled notifications. Available user data: {len(data.get('available-user-data', []))}")
+                    logger.debug(f"Notification response: {data}")
+                elif response.status_code == 204:
+                    logger.info("Pulled notifications (No Content)")
+                else:
+                    logger.warning(f"Failed to pull notifications: {response.status_code} - {response.text}")
+                    
+        except Exception as e:
+            logger.warning(f"Error pulling notifications: {e}")
+
     async def get_new_activities(self) -> list[PolarActivity]:
         """
         Get new activities from Polar.
@@ -191,6 +227,9 @@ class PolarClient:
             List of new PolarActivity objects.
         """
         activities = []
+        
+        # Pull notifications first as requested/required to trigger data availability
+        await self._pull_notifications()
         
         try:
             if not self.user_id:
@@ -205,6 +244,28 @@ class PolarClient:
                 logger.info(f"Fetching exercises from {url}")
                 response = await client.get(url)
                 
+                # Auto-register logic if needed
+                should_retry = False
+                
+                if response.status_code == 404:
+                    logger.warning("Received 404 from Exercises API. Attempting user registration...")
+                    if await self._register_user():
+                         should_retry = True
+                    else:
+                         logger.warning("Registration confirmed (or failed), but 404 persists.")
+                
+                # If success but empty, also try registering just in case
+                elif response.status_code == 200 and not response.json():
+                     logger.info("No exercises found. Verifying user registration...")
+                     if await self._register_user():
+                          logger.info("Registration successful. Retrying fetch...")
+                          should_retry = True
+                
+                # Retry if registration happened
+                if should_retry:
+                     logger.info(f"Retrying fetch from {url}")
+                     response = await client.get(url)
+
                 if response.status_code == 401:
                      logger.error("Authentication failed (401). Token may be expired.")
                      return []
@@ -236,11 +297,6 @@ class PolarClient:
                         
                 else:
                     logger.warning(f"Failed to list exercises: {response.status_code} - {response.text}")
-                    # If 404, standard logic might suggest user not registered, but let's just log for now
-                    if response.status_code == 404:
-                         logger.warning("Received 404. User might not be registered or API endpoint changed.")
-                         # Optional: try self._register_user() if we firmly believe it's needed,
-                         # but usually Authorize flow handles it.
                 
         except Exception as e:
             logger.error(f"Failed to get activities: {e}")
